@@ -6,6 +6,7 @@
         RUNTIME_VERSION = '3.9'
         HANDLER = 'create_policy_api'
         PACKAGES = ('requests')
+        EXTERNAL_ACCESS_INTEGRATIONS = (API_EXTERNAL_ACCESS)
         AS
         $$
 import requests

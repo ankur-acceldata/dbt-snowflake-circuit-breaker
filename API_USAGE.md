@@ -2,9 +2,9 @@
 
 ## Overview
 This dbt project integrates with external APIs to implement a three-step policy execution workflow:
-1. **Create Policy**: Call `POST https://dbttest.free.beeceptor.com/createpolicy`
-2. **Poll Policy Status**: Call `GET https://dbttest.free.beeceptor.com/policy/{policy_id}` (up to 3 retries)
-3. **Trigger Circuit Breaker**: Call `POST https://dbttest.free.beeceptor.com/circuit` when policy is ready
+1. **Create Policy**: Call `POST https://httpbin.org/post` (simulating policy creation)
+2. **Poll Policy Status**: Call `GET https://httpbin.org/get` (simulating status checks, up to 3 retries)
+3. **Trigger Circuit Breaker**: Call `POST https://httpbin.org/post` (simulating circuit breaker trigger) when policy is ready
 
 ## Quick Start
 
@@ -56,7 +56,7 @@ CREATE TABLE policy_execution_state (
 ## API Endpoints
 
 ### 1. Create Policy
-**Endpoint**: `POST https://dbttest.free.beeceptor.com/createpolicy`
+**Endpoint**: `POST https://httpbin.org/post` (Test endpoint simulating policy creation)
 **Request Headers**:
 - `Content-Type: application/json`
 - `Accept: application/json`
@@ -90,7 +90,7 @@ CREATE TABLE policy_execution_state (
 ```
 
 ### 2. Poll Policy Status
-**Endpoint**: `GET https://dbttest.free.beeceptor.com/policy/{policy_id}`
+**Endpoint**: `GET https://httpbin.org/get` (Test endpoint simulating status checks)
 **Request Headers**:
 - `Accept: application/json`
 
@@ -109,7 +109,7 @@ CREATE TABLE policy_execution_state (
 - `failed` / `error`: Policy creation failed
 
 ### 3. Trigger Circuit Breaker
-**Endpoint**: `POST https://dbttest.free.beeceptor.com/circuit`
+**Endpoint**: `POST https://httpbin.org/post` (Test endpoint simulating circuit breaker trigger)
 **Request Headers**:
 - `Content-Type: application/json`
 - `Accept: application/json`
@@ -231,16 +231,17 @@ AND start_time < DATEADD(hour, -1, CURRENT_TIMESTAMP());
 - Network access to API endpoints
 
 ### API Server Requirements
-- HTTP server running on `https://dbttest.free.beeceptor.com`
-- Endpoints implemented: `/createpolicy`, `/policy/{id}`, `/circuit`
+- Uses `https://httpbin.org` as a reliable test service
+- Endpoints: `/post` for creation/circuit breaker, `/get` for status checks
 - JSON request/response format
 - HTTPS support enabled
+- No external server setup required
 
 ## Troubleshooting
 
 ### Common Issues
 1. **Module not found errors**: Ensure Python packages are available in Snowflake
-2. **Connection errors**: Check API server is accessible at `https://dbttest.free.beeceptor.com`
+2. **Connection errors**: Check network connectivity to `https://httpbin.org`
 3. **SQL compilation errors**: Verify state table exists and has correct schema
 4. **Permission errors**: Ensure dbt user has CREATE/INSERT permissions
 
@@ -253,13 +254,13 @@ AND start_time < DATEADD(hour, -1, CURRENT_TIMESTAMP());
 ### Manual Testing
 ```bash
 # Test API endpoints manually
-curl -X POST https://dbttest.free.beeceptor.com/createpolicy \
+curl -X POST https://httpbin.org/post \
   -H "Content-Type: application/json" \
   -d '{"policy_name": "test_policy"}'
 
-curl -X GET https://dbttest.free.beeceptor.com/policy/test_policy_id
+curl -X GET https://httpbin.org/get
 
-curl -X POST https://dbttest.free.beeceptor.com/circuit \
+curl -X POST https://httpbin.org/post \
   -H "Content-Type: application/json" \
   -d '{"policy_id": "test_policy_id", "execution_id": "test_exec_id"}'
 ``` 

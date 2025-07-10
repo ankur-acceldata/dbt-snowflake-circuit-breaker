@@ -8,7 +8,7 @@
         "description": "Sample policy for data governance with circuit breaker",
         "priority": "high",
         "created_by": "dbt_user",
-        "expected_policy_id": "d74d726c-9ca0-4c96-b9e3-755396547dce",
+        "expected_policy_id": "744df8ed-a494-4b2e-ae19-f96ae7bfff45",
         "parameters": {
             "retention_days": 90,
             "classification": "sensitive", 
