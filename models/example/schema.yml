@@ -7,7 +7,7 @@ models:
     columns:
       - name: id
         description: "The primary key for this table"
-        data_tests:
+        tests:
           - unique
           - not_null
 
@@ -16,6 +16,26 @@ models:
     columns:
       - name: id
         description: "The primary key for this table"
-        data_tests:
+        tests:
           - unique
+          - not_null
+
+  - name: circuit_breaker_python
+    description: "A model demonstrating circuit breaker pattern with Python integration"
+    columns:
+      - name: todo_id
+        description: "The ID of the created todo item"
+        tests:
+          - not_null
+      - name: status
+        description: "The status of the circuit breaker operation"
+        tests:
+          - not_null
+      - name: polls_completed
+        description: "Number of successful poll attempts completed"
+        tests:
+          - not_null
+      - name: deletion_success
+        description: "Whether the todo item was successfully deleted"
+        tests:
           - not_null
