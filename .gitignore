@@ -6,6 +6,7 @@ dbt_internal_packages/
 
 # Python virtual environment
 dbt_env/
+dbt-test/
 venv/
 env/
 .env/
