@@ -1,229 +1,340 @@
-# DBT Policy Execution Implementation
+# DBT Snowflake Circuit Breaker - Policy Execution Workflow
 
-This implementation provides a robust way to handle long-running policy execution operations with state management and circuit breaker pattern in DBT using Snowflake.
+This implementation provides a robust **3-step policy execution workflow** with state management and circuit breaker pattern in DBT using Snowflake.
 
-## Architecture Overview
+## 🚀 Quick Start
 
-The implementation uses a state table in Snowflake to track the execution status and a recursive CTE to handle the polling mechanism. This ensures durability and allows tracking of the execution state across multiple runs.
+Execute the complete policy workflow with a single command:
 
-### Components
+```bash
+dbt run-operation run_policy_workflow
+```
 
-1. **State Table**: `policy_execution_state`
-   - Tracks execution status
-   - Maintains polling history
-   - Stores circuit breaker state
+This will execute the full 3-step process:
+1. **Create Policy** → Store policy ID in state table
+2. **Poll Policy Status** → Validate success (max 3 retries)
+3. **Trigger Circuit Breaker** → Only if policy execution succeeded
 
-2. **Main Model**: `policy_execution_model`
-   - Implements the execution logic
-   - Handles polling mechanism
-   - Manages circuit breaker decisions
+## 📋 What It Does
 
-3. **Results View**: `policy_execution_results`
-   - Provides easy access to execution results
-   - Shows current state and history
+The `run_policy_workflow` operation executes a complete policy lifecycle:
 
-## Sequence Diagram
+### **Step 1: Policy Creation**
+- Calls `/createpolicy` API endpoint
+- Extracts policy ID from response
+- Stores policy ID and execution details in `policy_execution_state` table
+- Verifies database storage before proceeding
+
+### **Step 2: Policy Status Polling**
+- Polls `/policy/{policy_id}` API endpoint (max 3 attempts)
+- Validates both API response AND database state
+- Checks for success statuses: `success`, `completed`, `active`, `ready`
+- Updates state table with each poll attempt
+- Only proceeds to Step 3 if both API and database confirm success
+
+### **Step 3: Circuit Breaker Activation**
+- Calls `/circuit` API endpoint
+- Triggers circuit breaker for successful policy execution
+- Updates final completion status in database
+- Marks workflow as successfully completed
+
+## 🔧 Architecture Overview
+
+The implementation uses a state table in Snowflake to track execution status and provides full audit trail of the workflow execution.
+
+### **State Table Structure**
+```sql
+CREATE TABLE policy_execution_state (
+    "execution_id" VARCHAR,
+    "policy_id" VARCHAR,
+    "poll_count" NUMBER DEFAULT 0,
+    "status" VARCHAR DEFAULT 'pending',
+    "start_time" TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+    "last_poll_time" TIMESTAMP_NTZ,
+    "completed" BOOLEAN DEFAULT FALSE,
+    "requires_circuit_breaker" BOOLEAN DEFAULT FALSE,
+    "circuit_breaker_initiated" BOOLEAN DEFAULT FALSE,
+    "circuit_breaker_completed" BOOLEAN DEFAULT FALSE,
+    "error_message" VARCHAR,
+    "message" VARCHAR,
+    "api_response" VARIANT,
+    "policy_data" VARIANT,
+    "policy_status_response" VARIANT,
+    "circuit_breaker_response" VARIANT
+);
+```
+
+### **Workflow States**
+- `pending` → Initial state
+- `policy_created` → Step 1 completed
+- `policy_ready` → Step 2 completed (success status confirmed)
+- `completed` → Step 3 completed (circuit breaker triggered)
+- `error` → Failed at any step
+
+## 🔄 Workflow Sequence
 
 ```mermaid
 sequenceDiagram
-    participant DBT as DBT Run
-    participant State as State Table
-    participant API as External API
-    participant Circuit as Circuit Breaker
+    participant DBT as "DBT Run Operation"
+    participant State as "State Table"
+    participant CreateAPI as "/createpolicy API"
+    participant StatusAPI as "/policy/{id} API"
+    participant CircuitAPI as "/circuit API"
 
-    DBT->>State: Check Current State
-    alt No Active Execution
-        DBT->>API: Initiate Policy Execution
-        API-->>DBT: Return Execution ID
-        DBT->>State: Store Execution ID
-    else Has Active Execution
-        DBT->>API: Poll Execution Status
-        API-->>DBT: Return Current Status
-        DBT->>State: Update Status
-        alt Execution Complete
-            DBT->>State: Check Circuit Breaker Need
-            opt Circuit Breaker Required
-                DBT->>Circuit: Initiate Circuit Breaker
-                Circuit-->>DBT: Confirm Initiation
-                DBT->>State: Mark Circuit Breaker Complete
-            end
+    DBT->>State: "Clear old completed records"
+    DBT->>CreateAPI: "POST policy data"
+    CreateAPI-->>DBT: "Return policy_id"
+    DBT->>State: "Store policy_id + execution_id"
+    
+    loop "Poll Status (max 3 attempts)"
+        DBT->>State: "Check database state"
+        DBT->>StatusAPI: "GET /policy/{policy_id}"
+        StatusAPI-->>DBT: "Return status"
+        DBT->>State: "Update poll count + status"
+        alt "Success Status + DB Ready"
+            DBT->>State: "Mark as policy_ready"
+            Note right of DBT: "Exit polling loop"
+        else "Max retries reached"
+            DBT->>State: "Mark as error"
+            Note right of DBT: "Workflow fails"
         end
     end
+    
+    DBT->>State: "Final verification"
+    DBT->>CircuitAPI: "POST circuit breaker request"
+    CircuitAPI-->>DBT: "Confirm circuit breaker"
+    DBT->>State: "Mark as completed"
 ```
 
-## Implementation Steps
+> **Note**: If the diagram above doesn't render properly, you can view it at [Mermaid Live Editor](https://mermaid.live) by copying the code block.
 
-1. **Setup State Table**
-   ```sql
-   CREATE TABLE policy_execution_state (
-       execution_id VARCHAR,
-       poll_count NUMBER,
-       status VARCHAR,
-       start_time TIMESTAMP_NTZ,
-       last_poll_time TIMESTAMP_NTZ,
-       completed BOOLEAN,
-       requires_circuit_breaker BOOLEAN,
-       circuit_breaker_initiated BOOLEAN,
-       error_message VARCHAR,
-       message VARCHAR
-   );
-   ```
+### **Alternative Visual Flow:**
 
-2. **Configure DBT Project**
-   ```yaml
-   # dbt_project.yml
-   models:
-     your_project:
-       example:
-         +materialized: table
-         +tags:
-           - policy_execution
-   ```
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   STEP 1        │    │     STEP 2       │    │    STEP 3       │
+│ Create Policy   │───▶│  Poll Status     │───▶│ Circuit Breaker │
+│                 │    │  (Max 3 retries) │    │                 │
+│ ✅ Store in DB  │    │ ✅ Validate DB   │    │ ✅ Complete     │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+        │                       │                       │
+        ▼                       ▼                       ▼
+   policy_created         policy_ready            completed
+```
 
-3. **Create Required Files**
-   ```
-   models/
-   ├── example/
-   │   ├── policy_execution_model.sql
-   │   └── policy_execution_results.sql
-   macros/
-   ├── policy_execution.sql
-   └── get_policy_execution_state.sql
-   ```
+## 📊 Usage Examples
 
-## Configuration Requirements
+### **1. Execute Complete Workflow**
+```bash
+# Run the complete 3-step workflow
+dbt run-operation run_policy_workflow
+```
 
-1. **Snowflake Setup**
-   ```sql
-   -- Required Permissions
-   GRANT CREATE TABLE ON SCHEMA <your_schema> TO ROLE <your_role>;
-   GRANT CREATE VIEW ON SCHEMA <your_schema> TO ROLE <your_role>;
-   ```
+### **2. Check Execution Results**
+```sql
+-- View recent executions
+SELECT 
+    "execution_id",
+    "policy_id", 
+    "status",
+    "poll_count",
+    "circuit_breaker_completed",
+    "message",
+    "start_time"
+FROM policy_execution_state 
+ORDER BY "start_time" DESC 
+LIMIT 10;
+```
 
-2. **Environment Variables**
-   ```shell
-   # Required for API Integration
-   export POLICY_API_ENDPOINT="https://your-api-endpoint"
-   export POLICY_API_KEY="your-api-key"
-   ```
+### **3. Check Current Status**
+```sql
+-- Check if any executions are in progress
+SELECT COUNT(*) as active_executions
+FROM policy_execution_state 
+WHERE "completed" = FALSE;
+```
 
-## Usage
+### **4. Diagnostic Information**
+```bash
+# Run diagnostic operation to check system state
+dbt run-operation diagnose_policy_execution
+```
 
-1. **Run the Model**
-   ```shell
-   dbt run --select policy_execution_model
-   ```
+## 🔧 API Integration Points
 
-2. **Check Results**
-   ```shell
-   dbt run --select policy_execution_results
-   ```
+### **Step 1: Policy Creation**
+- **Endpoint**: `POST https://dbttest.free.beeceptor.com/createpolicy`
+- **Request**: Policy data (JSON)
+- **Response**: `{ "policy_id": "string", "execution_id": "string" }`
 
-3. **Monitor State**
-   ```sql
-   SELECT * FROM policy_execution_state
-   ORDER BY start_time DESC;
-   ```
+### **Step 2: Policy Status Check**
+- **Endpoint**: `GET https://dbttest.free.beeceptor.com/policy/{policy_id}`
+- **Response**: `{ "status": "success|completed|active|ready|pending|failed" }`
 
-## Integration Points
+### **Step 3: Circuit Breaker**
+- **Endpoint**: `POST https://dbttest.free.beeceptor.com/circuit`
+- **Request**: `{ "policy_id": "string", "execution_id": "string", "trigger_reason": "string" }`
+- **Response**: Circuit breaker confirmation
 
-1. **Policy Execution API**
-   - Endpoint: `POST /api/policy/execute`
-   - Response: `{ "execution_id": "string" }`
-
-2. **Status Check API**
-   - Endpoint: `GET /api/policy/status/{execution_id}`
-   - Response: `{ "status": "string", "completed": boolean }`
-
-3. **Circuit Breaker API**
-   - Endpoint: `POST /api/circuit-breaker/initiate`
-   - Payload: `{ "execution_id": "string" }`
-
-## Error Handling
+## 🚨 Error Handling
 
 The implementation includes comprehensive error handling:
 
-1. **API Failures**
-   - Retries on transient failures
-   - Records error messages in state table
-   - Maintains last known good state
+### **API Error Handling**
+- **JSON Parsing**: Graceful handling of non-JSON responses
+- **HTTP Errors**: Proper status code checking with retries
+- **Empty Responses**: Fallback responses for empty API responses
+- **Timeout Handling**: 30-second timeout for all API calls
 
-2. **Circuit Breaker Failures**
-   - Records failure reason
-   - Allows manual intervention
-   - Maintains audit trail
+### **Database Error Handling**
+- **State Validation**: Verifies each step completion in database
+- **Transaction Safety**: Each step is atomic with rollback capability
+- **Audit Trail**: Complete history of all operations and errors
 
-3. **State Management**
-   - Prevents duplicate executions
-   - Handles incomplete states
-   - Provides cleanup mechanisms
+### **Step-Specific Error Handling**
+- **Step 1 Failure**: Records API call errors and stops execution
+- **Step 2 Failure**: Retries up to 3 times with detailed error messages
+- **Step 3 Failure**: Marks Steps 1&2 as successful, Step 3 as failed
 
-## Monitoring and Maintenance
+## 📈 Monitoring and Maintenance
 
-1. **Health Checks**
-   ```sql
-   -- Check for stuck executions
-   SELECT *
-   FROM policy_execution_state
-   WHERE completed = FALSE
-   AND start_time < DATEADD(hour, -1, CURRENT_TIMESTAMP());
-   ```
+### **Health Checks**
+```sql
+-- Check for stuck executions (running > 1 hour)
+SELECT "execution_id", "status", "start_time", "message"
+FROM policy_execution_state
+WHERE "completed" = FALSE
+AND "start_time" < DATEADD(hour, -1, CURRENT_TIMESTAMP());
+```
 
-2. **Cleanup Old Data**
-   ```sql
-   -- Remove completed executions older than 7 days
-   DELETE FROM policy_execution_state
-   WHERE completed = TRUE
-   AND start_time < DATEADD(day, -7, CURRENT_TIMESTAMP());
-   ```
+### **Success Rate Monitoring**
+```sql
+-- Check success rate in last 24 hours
+SELECT 
+    COUNT(*) as total_executions,
+    SUM(CASE WHEN "status" = 'completed' THEN 1 ELSE 0 END) as successful,
+    SUM(CASE WHEN "status" = 'error' THEN 1 ELSE 0 END) as failed,
+    ROUND(100.0 * SUM(CASE WHEN "status" = 'completed' THEN 1 ELSE 0 END) / COUNT(*), 2) as success_rate_percent
+FROM policy_execution_state
+WHERE "start_time" >= DATEADD(hour, -24, CURRENT_TIMESTAMP());
+```
 
-## Best Practices
+### **Automatic Cleanup**
+The system automatically cleans up completed records older than 1 hour to prevent table bloat.
+
+## 🔒 Prerequisites
+
+### **Snowflake Setup**
+```sql
+-- Required: External access integration for API calls
+CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION API_EXTERNAL_ACCESS
+ALLOWED_NETWORK_RULES = ('allow_all_rule')
+ENABLED = TRUE;
+
+-- Grant necessary permissions
+GRANT CREATE TABLE ON SCHEMA <your_schema> TO ROLE <your_role>;
+GRANT CREATE PROCEDURE ON SCHEMA <your_schema> TO ROLE <your_role>;
+GRANT USAGE ON INTEGRATION API_EXTERNAL_ACCESS TO ROLE <your_role>;
+```
+
+### **DBT Configuration**
+```yaml
+# dbt_project.yml
+name: 'test_sf'
+version: '1.0.0'
+profile: 'test_sf'
+
+models:
+  test_sf:
+    example:
+      +materialized: view
+```
+
+## 🎯 Key Features
+
+- ✅ **Complete 3-Step Workflow**: Policy creation → Status polling → Circuit breaker
+- ✅ **State Management**: Full audit trail in Snowflake table
+- ✅ **Error Resilience**: Graceful handling of API failures and non-JSON responses
+- ✅ **Retry Logic**: Up to 3 attempts for policy status polling
+- ✅ **Database Validation**: Dual validation of API response and database state
+- ✅ **Auto Cleanup**: Automatic cleanup of old completed records
+- ✅ **Debug Information**: Comprehensive logging and debug output
+
+## 🚀 Advanced Usage
+
+### **Custom Policy Data**
+The workflow uses sample policy data by default. To customize, modify the `policy_data` in `run_policy_workflow` macro:
+
+```sql
+{% set policy_data = {
+    "policy_name": "your_policy_name",
+    "policy_type": "your_policy_type",
+    "description": "Your policy description",
+    "priority": "high|medium|low",
+    "parameters": {
+        "retention_days": 90,
+        "classification": "sensitive"
+    }
+} %}
+```
+
+### **Integration with CI/CD**
+```bash
+# In your CI/CD pipeline
+dbt run-operation run_policy_workflow
+if [ $? -eq 0 ]; then
+    echo "Policy workflow completed successfully"
+else
+    echo "Policy workflow failed"
+    exit 1
+fi
+```
+
+## 📝 Best Practices
 
 1. **State Management**
-   - Always use the state table for tracking
-   - Don't delete in-progress records
-   - Maintain audit trail
+   - Monitor the state table regularly
+   - Don't manually delete in-progress records
+   - Use diagnostic operations for troubleshooting
 
 2. **Error Handling**
-   - Log all API interactions
-   - Include error context
-   - Enable easy debugging
+   - Check logs for detailed error information
+   - Investigate failed executions promptly
+   - Monitor success rates over time
 
-3. **Circuit Breaker**
-   - Define clear trigger conditions
-   - Log all decisions
-   - Allow manual override
+3. **Performance**
+   - The system auto-cleans old records
+   - Monitor table size if high volume
+   - Consider archiving old successful executions
 
-## Limitations
+## 🔍 Troubleshooting
 
-1. **Polling Interval**
-   - Fixed at recursive CTE steps
-   - No dynamic adjustment
-   - Maximum 10 attempts
+### **Common Issues**
 
-2. **Concurrency**
-   - Single execution at a time
-   - No parallel polling
-   - Sequential processing
+1. **"API_RESPONSE invalid identifier"**
+   - Fixed: Now uses quoted column names for Snowflake case sensitivity
 
-3. **State Cleanup**
-   - Manual cleanup required
-   - No automatic archiving
-   - Requires maintenance
+2. **"JSON parsing error"**
+   - Fixed: Graceful handling of non-JSON responses with fallback data
 
-## Future Improvements
+3. **"STEP X FAILED"**
+   - Check the `error_message` column in `policy_execution_state`
+   - Review API endpoints and network connectivity
+   - Verify external access integration permissions
 
-1. **Dynamic Polling**
-   - Implement exponential backoff
-   - Add configurable intervals
-   - Support timeout settings
+### **Debug Commands**
+```bash
+# Check system status
+dbt run-operation diagnose_policy_execution
 
-2. **Enhanced Monitoring**
-   - Add execution metrics
-   - Implement alerting
-   - Create dashboards
+# View recent executions
+dbt run-operation get_policy_execution_state
+```
 
-3. **Advanced Features**
-   - Parallel execution support
-   - Automatic archiving
-   - Retry mechanisms
+## 🎉 Success Confirmation
+
+A successful execution will show:
+- ✅ Step 1: Policy created and stored in state table
+- ✅ Step 2: Policy status confirmed as success/ready
+- ✅ Step 3: Circuit breaker triggered successfully
+- ✅ Final status: `completed` with `circuit_breaker_completed = TRUE`
