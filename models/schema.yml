@@ -1,0 +1,58 @@
+version: 2
+
+models:
+  - name: stateful_policy_execution
+    description: "Production model for stateful policy execution with complete audit trail"
+    columns:
+      - name: execution_id
+        description: "The unique identifier for the policy execution"
+        tests:
+          - not_null
+      - name: policy_id
+        description: "The unique identifier for the created policy"
+        tests:
+          - not_null
+      - name: status
+        description: "The current status of the policy execution (pending, policy_created, policy_ready, completed, error)"
+        tests:
+          - not_null
+      - name: poll_count
+        description: "Number of policy status polling attempts completed (max 3)"
+        tests:
+          - not_null
+      - name: start_time
+        description: "When the policy execution started"
+        tests:
+          - not_null
+      - name: completed
+        description: "Whether the workflow has been completed (success or failure)"
+        tests:
+          - not_null
+      - name: circuit_breaker_initiated
+        description: "Whether circuit breaker has been initiated"
+        tests:
+          - not_null
+      - name: circuit_breaker_completed
+        description: "Whether circuit breaker API call has been completed successfully"
+        tests:
+          - not_null
+      - name: overall_status
+        description: "Overall execution status (Full Success, Failed, In Progress, Partial Success)"
+        tests:
+          - not_null 
+
+  - name: stateless_circuit_breaker
+    description: "Production model for stateless circuit breaker execution without state persistence"
+    columns:
+      - name: workflow_status
+        description: "The final status of the stateless workflow execution"
+        tests:
+          - not_null
+      - name: message
+        description: "Descriptive message about the stateless execution"
+        tests:
+          - not_null
+      - name: execution_timestamp
+        description: "When the stateless execution was completed"
+        tests:
+          - not_null
