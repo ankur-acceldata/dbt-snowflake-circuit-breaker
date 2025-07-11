@@ -1,7 +1,7 @@
 {% macro run_policy_workflow() %}
     {{ log("Starting Policy Execution Workflow...", info=True) }}
     
-    {# Execute the policy workflow with sample data #}
+    {# Sample policy data for testing #}
     {% set policy_data = {
         "policy_name": "sample_policy",
         "policy_type": "data_governance", 
@@ -19,27 +19,29 @@
     
     {{ log("Policy data: " ~ tojson(policy_data), info=True) }}
     
-    {# Execute the policy workflow #}
-    {% set workflow_sql = policy_execution(policy_data) %}
-    {% do run_query(workflow_sql) %}
+    {# Execute the policy workflow directly #}
+    {{ log("Executing the policy workflow...", info=True) }}
+    {% set workflow_result = policy_execution(policy_data) %}
     
-    {{ log("Policy workflow execution completed!", info=True) }}
-    {{ log("Check the policy_execution_state table for results", info=True) }}
+    {{ log("Workflow result: " ~ workflow_result, info=True) }}
     
-    {# Show simple results count #}
+    {# Show recent executions count #}
     {% set count_sql %}
-        SELECT COUNT(*) as total_executions
+        SELECT COUNT(*) as total_executions,
+               SUM(CASE WHEN "status" = 'completed' THEN 1 ELSE 0 END) as completed_executions,
+               SUM(CASE WHEN "status" = 'error' THEN 1 ELSE 0 END) as failed_executions
         FROM {{ target.database }}.{{ target.schema }}.policy_execution_state
+        WHERE "start_time" >= DATEADD(hour, -1, CURRENT_TIMESTAMP())
     {% endset %}
     
-    {% set count_results = run_query(count_sql) %}
-    
-    {% if count_results %}
-        {% for row in count_results %}
-            {{ log("Total executions in state table: " ~ row[0], info=True) }}
-        {% endfor %}
+    {% if count_sql %}
+        {% set count_results = run_query(count_sql) %}
+        {% if count_results and count_results.rows and count_results.rows|length > 0 %}
+            {% set row = count_results.rows[0] %}
+            {{ log("Executions in last hour - Total: " ~ row[0] ~ ", Completed: " ~ row[1] ~ ", Failed: " ~ row[2], info=True) }}
+        {% endif %}
     {% endif %}
     
-    {{ log("To see detailed results, query the policy_execution_state table directly", info=True) }}
+    {{ log("Check the policy_execution_state table for detailed results", info=True) }}
     
 {% endmacro %} 
